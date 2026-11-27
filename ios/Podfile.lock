@@ -1,0 +1,36 @@
+PODS:
+  - Flutter (1.0.0)
+  - flutter_angle (0.4.2):
+    - Flutter
+    - FlutterAngle (~> 0.0.8)
+    - FlutterMacOS
+  - FlutterAngle (0.0.8)
+  - three_js_sensors (0.2.0):
+    - Flutter
+
+DEPENDENCIES:
+  - Flutter (from `Flutter`)
+  - flutter_angle (from `.symlinks/plugins/flutter_angle/darwin`)
+  - three_js_sensors (from `.symlinks/plugins/three_js_sensors/ios`)
+
+SPEC REPOS:
+  trunk:
+    - FlutterAngle
+
+EXTERNAL SOURCES:
+  Flutter:
+    :path: Flutter
+  flutter_angle:
+    :path: ".symlinks/plugins/flutter_angle/darwin"
+  three_js_sensors:
+    :path: ".symlinks/plugins/three_js_sensors/ios"
+
+SPEC CHECKSUMS:
+  Flutter: 71a624a5bc0c04062bf19101d501e466baf2fb47
+  flutter_angle: 68742dae62c908b37adc0300c1d09e56064d54b4
+  FlutterAngle: c810891af800750361b1d0e7cc944f2338d5ae18
+  three_js_sensors: 588c345b9ae356162449f14d11f7d1cf49a713d0
+
+PODFILE CHECKSUM: 3ba3a73b1b12adcf321a227a745625fe0888cc82
+
+COCOAPODS: 1.17.0
