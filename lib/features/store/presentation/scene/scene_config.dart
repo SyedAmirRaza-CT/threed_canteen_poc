@@ -51,7 +51,8 @@ class SceneConfig {
   static const double shelfDepth = 0.6;
   static const double shelfHeight = 3.4;
   static const int slotsPerBoard = 6;
-  static const double shelfZStart = -9;
+  static const double shelfZStart =
+      -6.4; // clear lane in front of the service counter
   static const double shelfZEnd = -1;
   static const List<double> boardHeights = [0.45, 1.1, 1.75, 2.4];
   static const double slotSpacing = 1.0;

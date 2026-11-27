@@ -28,10 +28,18 @@ class ShelfFace {
 }
 
 class ProductSpot {
-  const ProductSpot(this.product, this.position, this.side);
+  const ProductSpot(
+    this.product,
+    this.position,
+    this.side, {
+    this.faceZ = false,
+  });
   final Product product;
   final three.Vector3 position;
   final int side;
+
+  /// True for counter items that face the shopper along +z (not a shelf face).
+  final bool faceZ;
 }
 
 /// All shelf copies of one product (one InstancedMesh). A copy can be hidden
@@ -81,10 +89,11 @@ class StoreBuild {
 }
 
 class _Place {
-  _Place(this.product, this.x, this.y, this.z, this.side);
+  _Place(this.product, this.x, this.y, this.z, this.side, {this.faceZ = false});
   final Product product;
   final double x, y, z;
   final int side;
+  final bool faceZ;
 }
 
 /// Builds the static store: floor, walls, gate, shelves, fridges, plants, products.
@@ -97,6 +106,7 @@ class StoreBuilder {
   late final StoreBuild _out;
   final List<_Place> _places = [];
   final Map<String, List<List<double>>> _tags = {}; // productId -> [x, y, z]
+  final Map<String, List<List<double>>> _tagsZ = {}; // counter tags facing +z
   three.Group get _root => _out.root;
 
   late final three.Material _oak = _wood(textures.oak);
@@ -114,6 +124,7 @@ class StoreBuilder {
     _shell();
     _gate();
     _fridges();
+    _serviceCounter();
     _counter();
     _plants();
     _shelves();
@@ -363,7 +374,7 @@ class StoreBuilder {
       3.85,
       SceneConfig.backZ + 0.04,
     );
-    final fresh = textures.sign('fresh');
+    final three.Texture? fresh = null; // replaced by the menu screens
     if (fresh != null) {
       _add(
         SceneKit.plane(7.0, 1.0),
@@ -525,6 +536,27 @@ class StoreBuilder {
 
   // ---- fridges: open glass-door display coolers ----------------------------
   void _fridges() {
+    // Back-wall corners keep their bays; the three bays that made way for the
+    // service counter moved onto the side walls near the entrance corners.
+    _fridgeBay(x: -7.6, z: SceneConfig.backZ, yaw: 0, width: 3.6);
+    _fridgeBay(x: 7.6, z: SceneConfig.backZ, yaw: 0, width: 3.6);
+    const wall = SceneConfig.halfWidth - 0.06;
+    _fridgeBay(x: -wall, z: 0.65, yaw: math.pi / 2, width: 2.9);
+    _fridgeBay(x: -wall, z: 3.65, yaw: math.pi / 2, width: 2.9);
+    _fridgeBay(x: wall, z: 0.65, yaw: -math.pi / 2, width: 2.9);
+    _out.colliders.add(
+      const Collider(-9.5, 9.5, SceneConfig.backZ, SceneConfig.backZ + 1.1),
+    );
+  }
+
+  /// One open glass-door cooler. Built facing +z at the origin, then the whole
+  /// group is rotated and moved into place ([yaw] pi/2 faces +x, -pi/2 faces -x).
+  void _fridgeBay({
+    required double x,
+    required double z,
+    required double yaw,
+    required double width,
+  }) {
     final body = SceneKit.mat(AppColors.fridgeBody, roughness: 0.5);
     final glass = SceneKit.glass(AppColors.glass, 0.16);
     final brass = SceneKit.mat(
@@ -533,87 +565,67 @@ class StoreBuilder {
       roughness: 0.25,
     );
     final led = SceneKit.basic(AppColors.lampWarm);
-    const zBack = SceneConfig.backZ;
-    const width = 3.6;
-    const centres = [-7.6, -3.8, 0.0, 3.8, 7.6];
     const shelfYs = [0.45, 1.05, 1.65, 2.25];
     final colors = <int>[
       for (final c in catalog.categories) c.color,
       0xFFFFFF,
       0xE8E0D2,
     ];
-    final goods = <List<double>>[];
-    for (final cx in centres) {
-      _add(
-        SceneKit.box(width, 2.9, 0.05),
+    final g = three.Group();
+    void add(
+      three.BufferGeometry geo,
+      three.Material mat,
+      double px,
+      double py,
+      double pz,
+    ) => g.add(SceneKit.mesh(geo, mat, x: px, y: py, z: pz));
+
+    add(SceneKit.box(width, 2.9, 0.05), body, 0, 1.45, 0.03); // back
+    for (final s in const [-1.0, 1.0]) {
+      add(
+        SceneKit.box(0.06, 2.9, 0.95),
         body,
-        cx,
+        s * (width / 2 - 0.03),
         1.45,
-        zBack + 0.03,
-      ); // back
-      for (final s in const [-1.0, 1.0]) {
-        _add(
-          SceneKit.box(0.06, 2.9, 0.95),
-          body,
-          cx + s * (width / 2 - 0.03),
-          1.45,
-          zBack + 0.5,
-        ); // sides
+        0.5,
+      ); // sides
+    }
+    add(SceneKit.box(width, 0.3, 0.95), body, 0, 0.15, 0.5); // plinth
+    add(SceneKit.box(width, 0.25, 0.95), _oak, 0, 2.85, 0.5); // oak top
+    add(SceneKit.box(width - 0.2, 0.05, 0.05), led, 0, 2.68, 0.95); // LED strip
+    final goods = <List<double>>[];
+    for (final y in shelfYs) {
+      add(SceneKit.box(width - 0.12, 0.03, 0.9), _oak, 0, y, 0.5);
+      var gx = -width / 2 + 0.25;
+      var i = 0;
+      while (gx < width / 2 - 0.25) {
+        final h = 0.26 + ((i * 7 + y * 13).floor() % 3) * 0.05;
+        goods.add([
+          gx,
+          y + 0.015 + h / 2,
+          0.78,
+          h,
+          colors[(i + (y * 10).floor()) % colors.length].toDouble(),
+        ]);
+        gx += 0.17;
+        i++;
       }
-      _add(
-        SceneKit.box(width, 0.3, 0.95),
-        body,
-        cx,
-        0.15,
-        zBack + 0.5,
-      ); // plinth
-      _add(
-        SceneKit.box(width, 0.25, 0.95),
-        _oak,
-        cx,
-        2.85,
-        zBack + 0.5,
-      ); // oak top
-      _add(
-        SceneKit.box(width - 0.2, 0.05, 0.05),
-        led,
-        cx,
-        2.68,
-        zBack + 0.95,
-      ); // warm LED strip
-      for (final y in shelfYs) {
-        _add(SceneKit.box(width - 0.12, 0.03, 0.9), _oak, cx, y, zBack + 0.5);
-        var x = cx - width / 2 + 0.25;
-        var i = 0;
-        while (x < cx + width / 2 - 0.25) {
-          final h = 0.26 + ((i * 7 + y * 13).floor() % 3) * 0.05;
-          goods.add([
-            x,
-            y + 0.015 + h / 2,
-            zBack + 0.78,
-            h,
-            colors[(i + (y * 10).floor()) % colors.length].toDouble(),
-          ]);
-          x += 0.17;
-          i++;
-        }
-      }
-      _add(
-        SceneKit.box(width - 0.1, 2.5, 0.03),
-        glass,
-        cx,
+    }
+    add(
+      SceneKit.box(width - 0.1, 2.5, 0.03),
+      glass,
+      0,
+      1.5,
+      1.0,
+    ); // glass front
+    for (final s in const [-0.55, 0.55]) {
+      add(
+        SceneKit.box(0.04, 1.0, 0.06),
+        brass,
+        s * (width / 3.6),
         1.5,
-        zBack + 1.0,
-      ); // glass front
-      for (final s in const [-0.55, 0.55]) {
-        _add(
-          SceneKit.box(0.04, 1.0, 0.06),
-          brass,
-          cx + s,
-          1.5,
-          zBack + 1.05,
-        ); // handles
-      }
+        1.05,
+      ); // handles
     }
     final inst = three.InstancedMesh(
       SceneKit.box(0.13, 1.0, 0.2),
@@ -623,16 +635,269 @@ class StoreBuilder {
     inst.frustumCulled = false;
     final m = three.Matrix4();
     for (var i = 0; i < goods.length; i++) {
-      final g = goods[i];
-      m.makeScale(1, g[3], 1);
-      m.setPosition(g[0], g[1], g[2]);
+      final gd = goods[i];
+      m.makeScale(1, gd[3], 1);
+      m.setPosition(gd[0], gd[1], gd[2]);
       inst.setMatrixAt(i, m);
-      inst.setColorAt(i, three.Color.fromHex32(g[4].toInt()));
+      inst.setColorAt(i, three.Color.fromHex32(gd[4].toInt()));
     }
     inst.instanceMatrix!.needsUpdate = true;
     inst.instanceColor!.needsUpdate = true;
-    _root.add(inst);
-    _out.colliders.add(const Collider(-9.5, 9.5, zBack, zBack + 1.1));
+    g.add(inst);
+    g.position.setValues(x, 0, z);
+    g.rotation.y = yaw;
+    _root.add(g);
+
+    if (yaw != 0) {
+      // side-wall bay: footprint is 1.1 deep in x and [width] long in z
+      final dir = yaw > 0 ? 1.0 : -1.0;
+      final x2 = x + dir * 1.1;
+      _out.colliders.add(
+        Collider(
+          x < x2 ? x : x2,
+          x < x2 ? x2 : x,
+          z - width / 2,
+          z + width / 2,
+        ),
+      );
+    }
+  }
+
+  // ---- service counter island (straight ahead of the door) -----------------
+  /// Cream ribbed base, two glass display cabinets (bakery left, snacks right),
+  /// a kitchen pass window, frosted side windows, four menu screens and
+  /// copper pendant lamps. The cabinet goods are real, buyable products.
+  void _serviceCounter() {
+    const zBack = SceneConfig.backZ;
+    const cz = zBack + 0.95; // island centre
+    const depth = 1.5;
+    const front = cz + depth / 2; // z of the glass front
+    const baseH = 0.85;
+    const cabW = 3.0;
+    const midW = 1.2;
+    const cabCx = midW / 2 + cabW / 2;
+    const half = midW / 2 + cabW;
+    final cream = SceneKit.mat(0xEFE2C8, roughness: 0.8);
+    final creamDark = SceneKit.mat(0xDCC9A6, roughness: 0.8);
+    final black = SceneKit.mat(0x14161A, roughness: 0.35, metalness: 0.4);
+    final steel = SceneKit.mat(0xC9CDD2, roughness: 0.3, metalness: 0.8);
+    final glass = SceneKit.glass(AppColors.glass, 0.12);
+    final copper = SceneKit.mat(0xB87333, roughness: 0.3, metalness: 0.85);
+
+    // ribbed base: slats over a solid core, centre block taller
+    for (final side in const [-1.0, 1.0]) {
+      _add(
+        SceneKit.box(cabW, baseH - 0.05, depth - 0.06),
+        creamDark,
+        side * cabCx,
+        (baseH - 0.05) / 2,
+        cz,
+      );
+      for (var i = 0; i < 20; i++) {
+        final x = side * cabCx - cabW / 2 + 0.075 + i * (cabW - 0.15) / 19;
+        _add(
+          SceneKit.box(0.06, baseH - 0.05, 0.05),
+          cream,
+          x,
+          (baseH - 0.05) / 2,
+          front + 0.02,
+        );
+      }
+    }
+    _add(SceneKit.box(midW, 1.25, depth), creamDark, 0, 0.625, cz);
+    for (var i = 0; i < 12; i++) {
+      final x = -midW / 2 + 0.06 + i * (midW - 0.12) / 11;
+      _add(SceneKit.box(0.06, 1.2, 0.05), cream, x, 0.62, front + 0.03);
+    }
+    _add(SceneKit.box(midW + 0.1, 0.05, depth + 0.1), cream, 0, 1.275, cz);
+
+    // glass cabinets
+    const shelfYs = [0.98, 1.3, 1.62];
+    final specs = <({double side, List<String> ids})>[
+      (side: -1.0, ids: ['cake', 'donut', 'croissant', 'muffin']),
+      (side: 1.0, ids: ['sandwich', 'burger', 'yogurt', 'orange']),
+    ];
+    for (final c in specs) {
+      final cx = c.side * cabCx;
+      const top = baseH + 1.12;
+      _add(SceneKit.box(cabW, 0.05, depth), black, cx, baseH + 0.025, cz);
+      _add(SceneKit.box(cabW, 0.05, depth + 0.06), black, cx, top + 0.025, cz);
+      for (final sx in const [-1.0, 1.0]) {
+        _add(
+          SceneKit.box(0.05, 1.12, 0.05),
+          black,
+          cx + sx * (cabW / 2 - 0.025),
+          baseH + 0.56,
+          front - 0.03,
+        );
+        _add(
+          SceneKit.box(0.03, 1.12, depth - 0.1),
+          glass,
+          cx + sx * (cabW / 2 - 0.02),
+          baseH + 0.56,
+          cz,
+          name: 'glass',
+        );
+      }
+      _add(
+        SceneKit.box(cabW - 0.1, 0.9, 0.04),
+        SceneKit.mat(0xE9E4DA, roughness: 0.6),
+        cx,
+        baseH + 0.6,
+        zBack + 0.35,
+      );
+      for (final y in shelfYs) {
+        _add(
+          SceneKit.box(cabW - 0.1, 0.025, depth - 0.2),
+          steel,
+          cx,
+          y,
+          cz - 0.02,
+        );
+      }
+      _add(
+        SceneKit.box(cabW - 0.1, 1.07, 0.025),
+        glass,
+        cx,
+        baseH + 0.575,
+        front - 0.03,
+        name: 'glass',
+      );
+
+      final items = <Product>[
+        for (final id in c.ids)
+          for (final p in catalog.products)
+            if (p.id == id) p,
+      ];
+      if (items.isEmpty) continue;
+      for (var l = 0; l < shelfYs.length; l++) {
+        final y0 = shelfYs[l] + 0.0125;
+        var x = cx - cabW / 2 + 0.22;
+        final xEnd = cx + cabW / 2 - 0.22;
+        var k = l;
+        var item = items[k % items.length];
+        var run = 0;
+        var runStart = true;
+        while (true) {
+          final spec = PackageSpec.of(item);
+          if (x + spec.width > xEnd) break;
+          _places.add(
+            _Place(
+              item,
+              x + spec.width / 2,
+              y0 + spec.height / 2,
+              front - 0.2 - spec.depth / 2,
+              0,
+              faceZ: true,
+            ),
+          );
+          if (runStart) {
+            (_tagsZ[item.id] ??= []).add([
+              x + 0.11,
+              shelfYs[l] + 0.045,
+              front - 0.06,
+            ]);
+            runStart = false;
+          }
+          x += spec.width + 0.03;
+          run++;
+          if (run >= 3) {
+            run = 0;
+            k++;
+            item = items[k % items.length];
+            runStart = true;
+            x += 0.06;
+          }
+        }
+      }
+    }
+    _out.colliders.add(Collider(-half - 0.1, half + 0.1, zBack, front + 0.05));
+
+    // kitchen pass window on the wall above the island
+    const wz = zBack + 0.07;
+    _add(
+      SceneKit.box(7.4, 1.3, 0.04),
+      SceneKit.mat(0xE4E0D8),
+      0,
+      2.3,
+      zBack + 0.03,
+    );
+    for (final y in const [1.62, 2.98]) {
+      _add(SceneKit.box(7.6, 0.1, 0.1), black, 0, y, wz);
+    }
+    for (final x in const [-3.75, 3.75]) {
+      _add(SceneKit.box(0.1, 1.46, 0.1), black, x, 2.3, wz);
+    }
+    _add(SceneKit.box(7.2, 0.05, 0.5), steel, 0, 1.7, zBack + 0.3);
+    for (final x in const [-1.2, 0.9]) {
+      final shirt = SceneKit.mat(x < 0 ? 0x5A1E2B : 0xF2F2F0);
+      _add(SceneKit.box(0.5, 0.65, 0.3), shirt, x, 2.1, zBack + 0.5);
+      _add(
+        SceneKit.sphere(0.13),
+        SceneKit.mat(AppColors.skin),
+        x,
+        2.57,
+        zBack + 0.5,
+      );
+      _add(
+        SceneKit.cyl(0.14, 0.15, 0.14, 12),
+        SceneKit.mat(0xF4F4F2),
+        x,
+        2.74,
+        zBack + 0.5,
+      );
+    }
+    _add(
+      SceneKit.box(0.45, 0.25, 0.3),
+      SceneKit.mat(0x2A2D31, metalness: 0.4),
+      2.4,
+      1.85,
+      zBack + 0.35,
+    );
+
+    // frosted side windows
+    final frost = SceneKit.glass(0xDCE6EA, 0.55);
+    for (final s in const [-1.0, 1.0]) {
+      final x = s * 4.7;
+      _add(SceneKit.box(1.8, 1.8, 0.03), frost, x, 1.85, zBack + 0.05);
+      for (final y in const [0.93, 2.77]) {
+        _add(SceneKit.box(1.9, 0.08, 0.08), black, x, y, zBack + 0.06);
+      }
+      for (final dx in const [-0.95, 0.95]) {
+        _add(SceneKit.box(0.08, 1.9, 0.08), black, x + dx, 1.85, zBack + 0.06);
+      }
+    }
+
+    // four menu screens on the slat panel
+    const labels = ['menu_video', 'menu_a', 'menu_b', 'menu_cake'];
+    for (var i = 0; i < 4; i++) {
+      final x = -2.445 + i * 1.63;
+      _add(SceneKit.box(1.58, 0.92, 0.05), black, x, 3.78, zBack + 0.1);
+      final tex = textures.sign(labels[i]);
+      _add(
+        SceneKit.plane(1.5, 0.84),
+        tex != null
+            ? three.MeshBasicMaterial({three.MaterialProperty.map: tex})
+            : SceneKit.basic(0x2A2D31),
+        x,
+        3.78,
+        zBack + 0.14,
+      );
+    }
+
+    // copper cone pendants over the island
+    for (final x in const [-2.4, 0.0, 2.4]) {
+      const h = SceneConfig.wallHeight;
+      _add(SceneKit.cyl(0.008, 0.008, 1.3, 6), black, x, h - 0.65, cz);
+      _add(SceneKit.cyl(0.05, 0.22, 0.4, 18), copper, x, h - 1.5, cz);
+      _add(
+        SceneKit.sphere(0.07, 10),
+        SceneKit.basic(AppColors.lampWarm),
+        x,
+        h - 1.68,
+        cz,
+      );
+    }
   }
 
   // ---- checkout counter ---------------------------------------------------
@@ -666,7 +931,6 @@ class StoreBuilder {
   // ---- plants: pots with real leaves ---------------------------------------
   void _plants() {
     const spots = [
-      [-9.0, 4.8, 1.0],
       [9.0, 4.8, 1.0],
       [-9.0, -10.6, 1.2],
       [9.0, -10.6, 1.2],
@@ -907,7 +1171,9 @@ class StoreBuilder {
       var i = 0;
       final spots = <ProductSpot>[];
       for (final pl in list) {
-        final yaw = (pl.side > 0 ? math.pi / 2 : -math.pi / 2) + spec.labelYaw;
+        final yaw =
+            (pl.faceZ ? 0.0 : (pl.side > 0 ? math.pi / 2 : -math.pi / 2)) +
+            spec.labelYaw;
         q.setFromAxisAngle(three.Vector3(0, 1, 0), yaw);
         if (cluster == null) {
           pos.setValues(pl.x, pl.y, pl.z);
@@ -929,7 +1195,12 @@ class StoreBuilder {
           }
         }
         spots.add(
-          ProductSpot(product, three.Vector3(pl.x, pl.y, pl.z), pl.side),
+          ProductSpot(
+            product,
+            three.Vector3(pl.x, pl.y, pl.z),
+            pl.side,
+            faceZ: pl.faceZ,
+          ),
         );
       }
       mesh.instanceMatrix!.needsUpdate = true;
@@ -947,6 +1218,24 @@ class StoreBuilder {
       final tags = three.InstancedMesh(
         SceneKit.box(0.012, 0.084, 0.2),
         mat,
+        e.value.length,
+      );
+      tags.name = 'tag';
+      tags.frustumCulled = false;
+      for (var i = 0; i < e.value.length; i++) {
+        pos.setValues(e.value[i][0], e.value[i][1], e.value[i][2]);
+        m.compose(pos, q, scale);
+        tags.setMatrixAt(i, m);
+      }
+      tags.instanceMatrix!.needsUpdate = true;
+      _root.add(tags);
+    }
+    for (final e in _tagsZ.entries) {
+      final tex = textures.tag(e.key);
+      if (tex == null) continue;
+      final tags = three.InstancedMesh(
+        SceneKit.box(0.2, 0.084, 0.012),
+        three.MeshBasicMaterial({three.MaterialProperty.map: tex}),
         e.value.length,
       );
       tags.name = 'tag';

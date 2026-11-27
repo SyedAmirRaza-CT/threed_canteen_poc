@@ -119,7 +119,11 @@ class _StorePageState extends State<StorePage> {
 
   void _openProduct(StoreCatalog catalog, Product p) {
     if (!mounted) return;
-    ProductDetailSheet.show(context, p, catalog.categoryOf(p));
+    ProductDetailSheet.show(
+      context,
+      p,
+      catalog.categoryOf(p),
+    ).whenComplete(() => _scene?.endShowcase());
   }
 
   @override

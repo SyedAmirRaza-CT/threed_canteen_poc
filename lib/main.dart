@@ -1,12 +1,12 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:provider/provider.dart';
 
-import 'core/constants/app_constants.dart';
-import 'core/di/injection.dart';
-import 'core/theme/app_theme.dart';
-import 'features/store/presentation/pages/store_page.dart';
-import 'features/store/presentation/providers/basket_provider.dart';
-import 'features/store/presentation/providers/store_provider.dart';
+import 'package:threed_canteen_poc/core/constants/app_constants.dart';
+import 'package:threed_canteen_poc/core/di/injection.dart';
+import 'package:threed_canteen_poc/core/theme/app_theme.dart';
+import 'package:threed_canteen_poc/features/store/presentation/pages/store_page.dart';
+import 'package:threed_canteen_poc/features/store/presentation/providers/basket_provider.dart';
+import 'package:threed_canteen_poc/features/store/presentation/providers/store_provider.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();

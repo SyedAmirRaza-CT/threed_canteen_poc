@@ -28,6 +28,8 @@ class ProductDetailSheet extends StatefulWidget {
   ) {
     return CustomBottomSheet.show<void>(
       context,
+      maxHeightFactor: 0.52,
+      barrierColor: Colors.black12,
       builder: (_) => ProductDetailSheet(product: product, category: category),
     );
   }
@@ -51,71 +53,62 @@ class _ProductDetailSheetState extends State<ProductDetailSheet> {
     final basket = context.watch<BasketProvider>();
     final remaining = basket.remaining(p);
     final qty = remaining == 0 ? 0 : _qty.clamp(1, remaining);
-    final wide =
-        MediaQuery.sizeOf(context).width >= 560 ||
-        Responsive.isLandscape(context);
-    final hero = _Hero(
-      product: p,
-      category: widget.category,
-      size: Responsive.scale(context, wide ? 150 : 140),
-    );
-    final details = _Details(
-      product: p,
-      remaining: remaining,
-      inBasket: basket.quantityOf(p),
-      qty: qty,
-      onQty: (v) => setState(() => _qty = v),
-      onAdd: () => _add(context),
-    );
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-      child: wide
-          ? Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                hero,
-                const SizedBox(width: 20),
-                Expanded(child: details),
-              ],
-            )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(child: hero),
-                const SizedBox(height: 16),
-                details,
-              ],
+    final out = p.stock == 0;
+    final allTaken = !out && remaining == 0;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // the 3D product spinning above the sheet is the hero image
+        Flexible(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+            child: _Details(
+              product: p,
+              remaining: remaining,
+              inBasket: basket.quantityOf(p),
+              qty: qty,
+              onQty: (v) => setState(() => _qty = v),
             ),
-    );
-  }
-}
-
-class _Hero extends StatelessWidget {
-  const _Hero({
-    required this.product,
-    required this.category,
-    required this.size,
-  });
-  final Product product;
-  final Category category;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = Color(0xFF000000 | category.color);
-    return Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: LinearGradient(
-          colors: [c.withValues(alpha: 0.25), c.withValues(alpha: 0.6)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+          ),
         ),
-      ),
-      child: Text(product.emoji, style: TextStyle(fontSize: size * 0.5)),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
+          child: Row(
+            children: [
+              Expanded(
+                child: SizedBox(
+                  height: Responsive.scale(context, 52),
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: OutlinedButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 2,
+                child: CustomElevatedButton(
+                  label: out
+                      ? AppStrings.outOfStock
+                      : (allTaken
+                            ? AppStrings.allInBasket
+                            : '${AppStrings.addToBasket} · ${AppConstants.currencySymbol}${p.price * qty}'),
+                  icon: Icons.add_shopping_cart_rounded,
+                  onPressed: remaining > 0 ? () => _add(context) : null,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -127,7 +120,6 @@ class _Details extends StatelessWidget {
     required this.inBasket,
     required this.qty,
     required this.onQty,
-    required this.onAdd,
   });
 
   final Product product;
@@ -135,14 +127,11 @@ class _Details extends StatelessWidget {
   final int inBasket;
   final int qty;
   final ValueChanged<int> onQty;
-  final VoidCallback onAdd;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final secondary = theme.textTheme.bodyMedium?.color?.withValues(alpha: 0.7);
-    final out = product.stock == 0;
-    final allTaken = !out && remaining == 0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -203,8 +192,8 @@ class _Details extends StatelessWidget {
               Chip(label: Text(i), visualDensity: VisualDensity.compact),
           ],
         ),
-        const SizedBox(height: 18),
-        if (remaining > 0) ...[
+        const SizedBox(height: 14),
+        if (remaining > 0)
           Row(
             children: [
               Text(
@@ -217,17 +206,6 @@ class _Details extends StatelessWidget {
               QuantityStepper(value: qty, max: remaining, onChanged: onQty),
             ],
           ),
-          const SizedBox(height: 14),
-        ],
-        CustomElevatedButton(
-          label: out
-              ? AppStrings.outOfStock
-              : (allTaken
-                    ? AppStrings.allInBasket
-                    : '${AppStrings.addToBasket} · ${AppConstants.currencySymbol}${product.price * qty}'),
-          icon: Icons.add_shopping_cart_rounded,
-          onPressed: remaining > 0 ? onAdd : null,
-        ),
       ],
     );
   }

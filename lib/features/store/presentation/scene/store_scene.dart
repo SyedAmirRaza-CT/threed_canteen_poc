@@ -10,6 +10,7 @@ import '../../domain/entities/basket.dart';
 import '../../domain/entities/product.dart';
 import '../providers/store_provider.dart';
 import 'held_basket.dart';
+import 'product_package.dart';
 import 'scene_config.dart';
 import 'scene_kit.dart';
 import 'scene_textures.dart';
@@ -53,6 +54,16 @@ class StoreScene {
   );
 
   StoreBuild? _build;
+  SceneTextures? _textures;
+
+  // Product showcase: the tapped item lifts off its shelf, spins and settles
+  // in the centre of the view while the detail sheet is open.
+  three.Group? _showcase;
+  ProductGroup? _showcaseGroup;
+  int _showcaseIdx = -1;
+  double _showcaseT = 0;
+  double _showcaseSpin = 0;
+  final three.Vector3 _showcaseFrom = three.Vector3();
   HeldBasket? _held;
   three.Mesh? _marker;
   List<BasketLine>? _pendingLines;
@@ -135,7 +146,12 @@ class StoreScene {
         'canteen': (text: 'CANTEEN', bg: 0x3B2A1E, fg: 0xF5E6CC),
         'open': (text: 'OPEN', bg: 0x2E9E4F, fg: 0xFFFFFF),
         'fresh': (text: 'Fresh every day', bg: 0x3B2A1E, fg: 0xE9C98A),
+        'menu_video': (text: 'LIVE KITCHEN', bg: 0x2A2D31, fg: 0xFFFFFF),
+        'menu_a': (text: 'MENU - Snacks', bg: 0xF7EBCB, fg: 0x5A3D27),
+        'menu_b': (text: 'MENU - Chinese Station', bg: 0xF7EBCB, fg: 0x5A3D27),
+        'menu_cake': (text: 'Fresh Cakes', bg: 0x2A2D31, fg: 0xFFFFFF),
       }, catalog.products);
+      _textures = textures;
       _build = StoreBuilder(catalog, textures).build();
       threeJs.scene.add(_build!.root);
       if (_pendingShelf != null) syncShelf(_pendingShelf!);
@@ -303,8 +319,8 @@ class StoreScene {
     final hits = _ray.intersectObject(build.root, true)
       ..sort((a, b) => a.distance.compareTo(b.distance));
     for (final hit in hits) {
-      if (hit.object?.name == 'tag') {
-        continue; // price tags never block a tap
+      if (hit.object?.name == 'tag' || hit.object?.name == 'glass') {
+        continue; // price tags and display glass never block a tap
       }
       final o = _owner(hit.object);
       if (o == null) {
@@ -338,6 +354,7 @@ class StoreScene {
 
   void dispose() {
     _disposed = true;
+    _removeShowcase(restore: false);
     threeJs.dispose();
     three.loading.clear();
     SceneKit.clear();
@@ -367,18 +384,22 @@ class StoreScene {
     final dx = spot.position.x - _pos.x, dz = spot.position.z - _pos.z;
     if (math.sqrt(dx * dx + dz * dz) <= SceneConfig.openDistance) {
       _faceTowards(spot.position.x, spot.position.z);
+      _beginShowcase();
       onProductTapped(spot.product);
       return;
     }
     _pendingSpot = spot; // walk to the front of the item first
     _setTarget(
       three.Vector3(
-        (spot.position.x + spot.side * SceneConfig.standDistance).clamp(
-          SceneConfig.minX,
-          SceneConfig.maxX,
-        ),
+        (spot.faceZ
+                ? spot.position.x
+                : spot.position.x + spot.side * SceneConfig.standDistance)
+            .clamp(SceneConfig.minX, SceneConfig.maxX),
         SceneConfig.eyeHeight,
-        spot.position.z.clamp(SceneConfig.minZ, SceneConfig.maxZ),
+        (spot.faceZ
+                ? spot.position.z + SceneConfig.standDistance
+                : spot.position.z)
+            .clamp(SceneConfig.minZ, SceneConfig.maxZ),
       ),
     );
   }
@@ -437,8 +458,90 @@ class StoreScene {
       );
       held.layout(threeJs.width / threeJs.height, _vfov);
     }
+    _updateShowcase(dt);
     _updateMarker();
     _updateAisle();
+  }
+
+  // ---- product showcase ---------------------------------------------------
+
+  /// Lifts the last tapped product off the shelf and flies it to the centre of
+  /// the view (a child of the camera, so it stays put while the sheet is open).
+  void _beginShowcase() {
+    final tap = _lastTap;
+    final tex = _textures;
+    if (tap == null || tex == null) return;
+    final g = _build?.groups[tap.id];
+    if (g == null) return;
+    _removeShowcase(restore: true);
+    final product = g.spots[tap.index].product;
+    final spec = PackageSpec.of(product);
+    final maxDim = math.max(spec.width, math.max(spec.height, spec.depth));
+    final s = (0.34 / maxDim).clamp(0.8, 3.2);
+    final model = spec.build(product, tex, scale: s);
+    // centre the model on its own origin so it spins around its middle
+    model.position.setValues(0, -spec.height * s / 2, 0);
+    final wrap = three.Group()..add(model);
+    wrap.scale.setValues(0.01, 0.01, 0.01);
+    // start where the item sits on the shelf, in camera space
+    final sp = g.spots[tap.index].position;
+    final dx = sp.x - _pos.x,
+        dy = sp.y - SceneConfig.eyeHeight,
+        dz = sp.z - _pos.z;
+    final cy = math.cos(_yaw), sy = math.sin(_yaw);
+    final cp = math.cos(_pitch), spn = math.sin(_pitch);
+    final x1 = dx * cy - dz * sy;
+    final z1 = dx * sy + dz * cy;
+    final ly = dy * cp + z1 * spn;
+    final lz = -dy * spn + z1 * cp;
+    _showcaseFrom.setValues(x1, ly, lz > -0.3 ? -0.5 : lz);
+    wrap.position.setValues(_showcaseFrom.x, _showcaseFrom.y, _showcaseFrom.z);
+    threeJs.camera.add(wrap);
+    g.setHidden(tap.index, true);
+    _showcase = wrap;
+    _showcaseGroup = g;
+    _showcaseIdx = tap.index;
+    _showcaseT = 0;
+    _showcaseSpin = 0;
+  }
+
+  /// Called when the detail sheet closes. A cancelled product goes back on
+  /// the shelf; an added one stays hidden (the basket sync already took it).
+  void endShowcase() => _removeShowcase(restore: true);
+
+  void _removeShowcase({required bool restore}) {
+    final w = _showcase;
+    if (w != null) threeJs.camera.remove(w);
+    final g = _showcaseGroup;
+    if (restore && g != null && _showcaseIdx >= 0) {
+      if (!g.hidden.contains(_showcaseIdx)) g.setHidden(_showcaseIdx, false);
+    }
+    _showcase = null;
+    _showcaseGroup = null;
+    _showcaseIdx = -1;
+  }
+
+  void _updateShowcase(double dt) {
+    final w = _showcase;
+    if (w == null) return;
+    _showcaseT = math.min(1, _showcaseT + dt / 0.75);
+    final t = _showcaseT;
+    final e = 1 - math.pow(1 - t, 3).toDouble(); // ease out
+    // rest position: upper middle of the view, above the bottom sheet
+    const dist = 1.0;
+    final half = math.tan(_vfov * math.pi / 360) * dist;
+    final ty = half * 0.5;
+    w.position.setValues(
+      _showcaseFrom.x + (0 - _showcaseFrom.x) * e,
+      _showcaseFrom.y + (ty - _showcaseFrom.y) * e,
+      _showcaseFrom.z + (-dist - _showcaseFrom.z) * e,
+    );
+    final sc = 0.01 + 0.99 * e;
+    w.scale.setValues(sc, sc, sc);
+    // two quick turns while it flies in, then a slow spin
+    _showcaseSpin += dt * (t < 1 ? 0 : 1.1);
+    w.rotation.y = (1 - e) * 4 * math.pi + _showcaseSpin;
+    w.rotation.x = 0.18 * e;
   }
 
   /// Swipes, scroll and keys feed an eased movement, so starting and
@@ -574,6 +677,7 @@ class StoreScene {
     _pendingSpot = null;
     if (spot == null) return;
     _faceTowards(spot.position.x, spot.position.z);
+    _beginShowcase();
     onProductTapped(spot.product);
   }
 

@@ -12,11 +12,14 @@ class CustomBottomSheet {
     BuildContext context, {
     required WidgetBuilder builder,
     bool dismissible = true,
+    double? maxHeightFactor,
+    Color? barrierColor,
   }) {
     return showModalBottomSheet<T>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      barrierColor: barrierColor,
       isDismissible: dismissible,
       enableDrag: dismissible,
       backgroundColor: Colors.transparent,
@@ -27,7 +30,7 @@ class CustomBottomSheet {
         final theme = Theme.of(ctx);
         final maxH =
             MediaQuery.sizeOf(ctx).height *
-            (Responsive.isShort(ctx) ? 0.98 : 0.9);
+            (maxHeightFactor ?? (Responsive.isShort(ctx) ? 0.98 : 0.9));
         return ConstrainedBox(
           constraints: BoxConstraints(maxHeight: maxH),
           child: DecoratedBox(
