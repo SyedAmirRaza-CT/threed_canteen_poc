@@ -64,6 +64,10 @@ class StoreScene {
   double _showcaseT = 0;
   double _showcaseSpin = 0;
   final three.Vector3 _showcaseFrom = three.Vector3();
+
+  /// Landscape: the detail panel takes the right side, so the item rests in
+  /// the free area on the left. Portrait: above the bottom sheet.
+  bool get _showcaseLandscape => threeJs.width > threeJs.height;
   HeldBasket? _held;
   three.Mesh? _marker;
   List<BasketLine>? _pendingLines;
@@ -477,7 +481,10 @@ class StoreScene {
     final product = g.spots[tap.index].product;
     final spec = PackageSpec.of(product);
     final maxDim = math.max(spec.width, math.max(spec.height, spec.depth));
-    final s = (0.34 / maxDim).clamp(0.8, 3.2);
+    // fraction of the screen height the item should fill (bigger in landscape)
+    final half = math.tan(_vfov * math.pi / 360);
+    final frac = _showcaseLandscape ? 0.42 : 0.3;
+    final s = (frac * 2 * half / maxDim).clamp(0.5, 4.0);
     final model = spec.build(product, tex, scale: s);
     // centre the model on its own origin so it spins around its middle
     model.position.setValues(0, -spec.height * s / 2, 0);
@@ -530,9 +537,12 @@ class StoreScene {
     // rest position: upper middle of the view, above the bottom sheet
     const dist = 1.0;
     final half = math.tan(_vfov * math.pi / 360) * dist;
-    final ty = half * 0.5;
+    final aspect = threeJs.width / threeJs.height;
+    final land = _showcaseLandscape;
+    final tx = land ? -half * aspect * 0.45 : 0.0;
+    final ty = land ? 0.0 : half * 0.5;
     w.position.setValues(
-      _showcaseFrom.x + (0 - _showcaseFrom.x) * e,
+      _showcaseFrom.x + (tx - _showcaseFrom.x) * e,
       _showcaseFrom.y + (ty - _showcaseFrom.y) * e,
       _showcaseFrom.z + (-dist - _showcaseFrom.z) * e,
     );

@@ -26,6 +26,43 @@ class ProductDetailSheet extends StatefulWidget {
     Product product,
     Category category,
   ) {
+    final size = MediaQuery.sizeOf(context);
+    if (size.width > size.height) {
+      // landscape: a side panel, so the 3D product stays visible on the left
+      final theme = Theme.of(context);
+      return showGeneralDialog<void>(
+        context: context,
+        barrierDismissible: true,
+        barrierLabel: 'Close',
+        barrierColor: Colors.black12,
+        transitionDuration: const Duration(milliseconds: 220),
+        pageBuilder: (ctx, _, _) => Align(
+          alignment: Alignment.centerRight,
+          child: SizedBox(
+            width: (size.width * 0.44).clamp(300.0, 460.0),
+            height: double.infinity,
+            child: Material(
+              color: theme.colorScheme.surface,
+              clipBehavior: Clip.antiAlias,
+              borderRadius: const BorderRadius.horizontal(
+                left: Radius.circular(24),
+              ),
+              child: SafeArea(
+                left: false,
+                child: ProductDetailSheet(product: product, category: category),
+              ),
+            ),
+          ),
+        ),
+        transitionBuilder: (ctx, anim, _, child) => SlideTransition(
+          position: Tween(
+            begin: const Offset(1, 0),
+            end: Offset.zero,
+          ).animate(CurvedAnimation(parent: anim, curve: Curves.easeOutCubic)),
+          child: child,
+        ),
+      );
+    }
     return CustomBottomSheet.show<void>(
       context,
       maxHeightFactor: 0.52,
@@ -55,22 +92,23 @@ class _ProductDetailSheetState extends State<ProductDetailSheet> {
     final qty = remaining == 0 ? 0 : _qty.clamp(1, remaining);
     final out = p.stock == 0;
     final allTaken = !out && remaining == 0;
+    final side =
+        MediaQuery.sizeOf(context).width > MediaQuery.sizeOf(context).height;
+    final scroller = SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+      child: _Details(
+        product: p,
+        remaining: remaining,
+        inBasket: basket.quantityOf(p),
+        qty: qty,
+        onQty: (v) => setState(() => _qty = v),
+      ),
+    );
     return Column(
-      mainAxisSize: MainAxisSize.min,
+      mainAxisSize: side ? MainAxisSize.max : MainAxisSize.min,
       children: [
-        // the 3D product spinning above the sheet is the hero image
-        Flexible(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
-            child: _Details(
-              product: p,
-              remaining: remaining,
-              inBasket: basket.quantityOf(p),
-              qty: qty,
-              onQty: (v) => setState(() => _qty = v),
-            ),
-          ),
-        ),
+        // the 3D product spinning next to the sheet is the hero image
+        if (side) Expanded(child: scroller) else Flexible(child: scroller),
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 4, 20, 16),
           child: Row(
