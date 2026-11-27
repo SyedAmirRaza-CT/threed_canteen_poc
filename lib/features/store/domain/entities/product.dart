@@ -34,6 +34,7 @@ class Product {
     required this.kind,
     required this.color,
     required this.accent,
+    this.displayModel,
   });
 
   final String id;
@@ -53,4 +54,9 @@ class Product {
   /// Main and accent colours of the 3D model as 0xRRGGBB.
   final int color;
   final int accent;
+
+  /// Name of a GLB model (see ModelLibrary) that stands for this product in the
+  /// store, e.g. a plated cake in the showcase. Such a product is bought by
+  /// tapping that model, and it is not stocked on the aisle shelves.
+  final String? displayModel;
 }

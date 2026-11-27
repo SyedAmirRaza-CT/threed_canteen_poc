@@ -15,6 +15,7 @@ class ProductModel extends Product {
     required super.kind,
     required super.color,
     required super.accent,
+    super.displayModel,
   });
 
   factory ProductModel.fromJson(Map<String, dynamic> json) => ProductModel(
@@ -31,6 +32,7 @@ class ProductModel extends Product {
     kind: ProductKind.values.byName(json['kind'] as String),
     color: json['color'] as int,
     accent: json['accent'] as int,
+    displayModel: json['displayModel'] as String?,
   );
 
   Map<String, dynamic> toJson() => {
@@ -47,5 +49,6 @@ class ProductModel extends Product {
     'kind': kind.name,
     'color': color,
     'accent': accent,
+    if (displayModel != null) 'displayModel': displayModel,
   };
 }

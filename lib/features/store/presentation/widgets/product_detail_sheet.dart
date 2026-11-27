@@ -5,11 +5,124 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../core/constants/app_strings.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/responsive.dart';
-import '../../../../core/widgets/custom_bottom_sheet.dart';
 import '../../../../core/widgets/custom_elevated_button.dart';
 import '../../domain/entities/category.dart';
 import '../../domain/entities/product.dart';
 import '../providers/basket_provider.dart';
+
+/// What the product sheet can ask the 3D scene to do with the showcased item.
+class ShowcaseControls {
+  const ShowcaseControls({required this.onRotate, required this.onZoom});
+  final ValueChanged<Offset> onRotate;
+  final ValueChanged<double> onZoom;
+}
+
+/// Full-screen layer for the product sheet: the 3D item above/left of the panel
+/// can be dragged to turn it (including tilting to see its top) and pinched to
+/// zoom; the details panel sits at the bottom (portrait) or right (landscape).
+class _ShowcaseOverlay extends StatefulWidget {
+  const _ShowcaseOverlay({
+    required this.animation,
+    required this.landscape,
+    required this.controls,
+    required this.child,
+  });
+  final Animation<double> animation;
+  final bool landscape;
+  final ShowcaseControls? controls;
+  final Widget child;
+
+  @override
+  State<_ShowcaseOverlay> createState() => _ShowcaseOverlayState();
+}
+
+class _ShowcaseOverlayState extends State<_ShowcaseOverlay> {
+  double _lastScale = 1;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final size = MediaQuery.sizeOf(context);
+    final c = widget.controls;
+    final land = widget.landscape;
+    final panel = land
+        ? SizedBox(
+            width: (size.width * 0.44).clamp(300.0, 460.0),
+            height: double.infinity,
+            child: Material(
+              color: theme.colorScheme.surface,
+              clipBehavior: Clip.antiAlias,
+              borderRadius: const BorderRadius.horizontal(
+                left: Radius.circular(24),
+              ),
+              child: SafeArea(left: false, child: widget.child),
+            ),
+          )
+        : ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: size.height * 0.52,
+              maxWidth: Responsive.isMobile(context) ? double.infinity : 640,
+            ),
+            child: Material(
+              color: theme.colorScheme.surface,
+              clipBehavior: Clip.antiAlias,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(28),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 10),
+                  Container(
+                    width: 44,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: theme.dividerColor,
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                  Flexible(child: widget.child),
+                ],
+              ),
+            ),
+          );
+    final slide = SlideTransition(
+      position:
+          Tween(
+            begin: land ? const Offset(1, 0) : const Offset(0, 1),
+            end: Offset.zero,
+          ).animate(
+            CurvedAnimation(
+              parent: widget.animation,
+              curve: Curves.easeOutCubic,
+            ),
+          ),
+      child: panel,
+    );
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // drag to rotate, pinch to zoom the showcased item
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onScaleStart: (_) => _lastScale = 1,
+          onScaleUpdate: (d) {
+            c?.onRotate(d.focalPointDelta);
+            if (d.pointerCount > 1 && d.scale > 0) {
+              c?.onZoom(d.scale / _lastScale);
+              _lastScale = d.scale;
+            }
+          },
+          child: const SizedBox.expand(),
+        ),
+        Align(
+          alignment: land ? Alignment.centerRight : Alignment.bottomCenter,
+          child: slide,
+        ),
+      ],
+    );
+  }
+}
 
 class ProductDetailSheet extends StatefulWidget {
   const ProductDetailSheet({
@@ -24,50 +137,24 @@ class ProductDetailSheet extends StatefulWidget {
   static Future<void> show(
     BuildContext context,
     Product product,
-    Category category,
-  ) {
+    Category category, {
+    ShowcaseControls? controls,
+  }) {
     final size = MediaQuery.sizeOf(context);
-    if (size.width > size.height) {
-      // landscape: a side panel, so the 3D product stays visible on the left
-      final theme = Theme.of(context);
-      return showGeneralDialog<void>(
-        context: context,
-        barrierDismissible: true,
-        barrierLabel: 'Close',
-        barrierColor: Colors.black12,
-        transitionDuration: const Duration(milliseconds: 220),
-        pageBuilder: (ctx, _, _) => Align(
-          alignment: Alignment.centerRight,
-          child: SizedBox(
-            width: (size.width * 0.44).clamp(300.0, 460.0),
-            height: double.infinity,
-            child: Material(
-              color: theme.colorScheme.surface,
-              clipBehavior: Clip.antiAlias,
-              borderRadius: const BorderRadius.horizontal(
-                left: Radius.circular(24),
-              ),
-              child: SafeArea(
-                left: false,
-                child: ProductDetailSheet(product: product, category: category),
-              ),
-            ),
-          ),
-        ),
-        transitionBuilder: (ctx, anim, _, child) => SlideTransition(
-          position: Tween(
-            begin: const Offset(1, 0),
-            end: Offset.zero,
-          ).animate(CurvedAnimation(parent: anim, curve: Curves.easeOutCubic)),
-          child: child,
-        ),
-      );
-    }
-    return CustomBottomSheet.show<void>(
-      context,
-      maxHeightFactor: 0.52,
-      barrierColor: Colors.black12,
-      builder: (_) => ProductDetailSheet(product: product, category: category),
+    return showGeneralDialog<void>(
+      context: context,
+      // the 3D view stays touchable (drag to rotate), so a tap outside does
+      // not close it: use Cancel, the close button or the back button
+      barrierDismissible: false,
+      barrierLabel: 'Close',
+      barrierColor: Colors.transparent,
+      transitionDuration: const Duration(milliseconds: 220),
+      pageBuilder: (ctx, anim, _) => _ShowcaseOverlay(
+        animation: anim,
+        landscape: size.width > size.height,
+        controls: controls,
+        child: ProductDetailSheet(product: product, category: category),
+      ),
     );
   }
 

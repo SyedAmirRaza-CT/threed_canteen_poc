@@ -102,6 +102,17 @@ class _StorePageState extends State<StorePage> {
         if (mounted) context.read<StoreProvider>().phase = p;
       },
       onProductTapped: (p) => _openProduct(catalog, p),
+      onObjectTapped: (kind, label) {
+        if (!mounted) return;
+        final m = ScaffoldMessenger.of(context);
+        m.hideCurrentSnackBar();
+        m.showSnackBar(
+          SnackBar(
+            content: Text(label),
+            duration: const Duration(milliseconds: 900),
+          ),
+        );
+      },
     );
   }
 
@@ -123,6 +134,10 @@ class _StorePageState extends State<StorePage> {
       context,
       p,
       catalog.categoryOf(p),
+      controls: ShowcaseControls(
+        onRotate: (d) => _scene?.rotateShowcase(d),
+        onZoom: (f) => _scene?.zoomShowcase(f),
+      ),
     ).whenComplete(() => _scene?.endShowcase());
   }
 

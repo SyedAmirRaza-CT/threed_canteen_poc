@@ -7,6 +7,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/category.dart';
 import '../../domain/entities/product.dart';
 import '../providers/store_provider.dart';
+import 'model_library.dart';
 import 'product_package.dart';
 import 'scene_config.dart';
 import 'scene_kit.dart';
@@ -78,10 +79,48 @@ class ProductGroup {
   }
 }
 
+/// A standalone object (tree, bench, plant, planter...) that can be selected.
+class SceneObject {
+  SceneObject(this.id, this.kind, this.node, {this.template});
+  final String id;
+  final String kind;
+  final three.Object3D node;
+
+  /// For a display model that stands for a product: the GLB model name.
+  final String? template;
+}
+
+/// One ceiling lamp with its own ON/OFF state: bulb glow, light cone and the
+/// pool of light on the floor are switched together.
+class LampObject {
+  LampObject(this.id, this.label, this.node, this.bulb, this.cone, this.pool);
+  final int id;
+
+  /// Name shown when the lamp is tapped.
+  final String label;
+  final three.Object3D node;
+  final three.MeshBasicMaterial bulb;
+  final three.Object3D cone;
+  final three.Object3D? pool;
+  bool on = true;
+
+  void setOn(bool value) {
+    on = value;
+    bulb.color.setFromHex32(value ? 0xFFD9A0 : 0x4A4036);
+    cone.visible = value;
+    pool?.visible = value;
+  }
+}
+
 /// Everything the scene controller needs to know about the built world.
 class StoreBuild {
   StoreBuild(this.root);
   final three.Group root;
+  final List<SceneObject> objects = [];
+  final List<LampObject> lamps = [];
+
+  /// GLB models by name, for things the scene clones later (the showcase).
+  final Map<String, three.Object3D> templates = {};
   final List<three.Object3D> doors = [];
   final List<ShelfFace> faces = [];
   final List<Collider> colliders = [];
@@ -99,9 +138,62 @@ class _Place {
 /// Builds the static store: floor, walls, gate, shelves, fridges, plants, products.
 /// Look: warm oak and walnut with black metal accents and warm pendant lamps.
 class StoreBuilder {
-  StoreBuilder(this.catalog, this.textures);
+  StoreBuilder(this.catalog, this.textures, {this.models});
   final StoreCatalog catalog;
   final SceneTextures textures;
+
+  /// GLB models (null or missing entries fall back to code-built shapes).
+  final ModelLibrary? models;
+
+  /// One shelf face (face looks to +x).
+  three.Object3D? get shelfModel => models?.models['shelf_half'];
+
+  /// While true, [_add] builds meshes but does not put them in the scene (the
+  /// GLB version of that part is shown instead). Used for parts that still need
+  /// the surrounding code for colliders, product spots and so on.
+  bool _skipVisuals = false;
+
+  /// Display pieces in the cabinet are drawn larger than life so they read well.
+  static const _cakeScale = 1.35;
+  static const _muffinScale = 1.6;
+  bool _gateGlb = false;
+
+  /// Makes [node] a selectable object: taps on it report [id].
+  void _register(
+    String kind,
+    String id,
+    three.Object3D node, {
+    String? template,
+  }) {
+    node.name = 'obj:$id';
+    _out.objects.add(SceneObject(id, kind, node, template: template));
+  }
+
+  /// Adds a clone of a GLB model, swapping its named placeholder materials
+  /// ('oak', 'walnut', 'shirt') for the store's own.
+  three.Object3D _addModel(
+    three.Object3D src, {
+    int? shirt,
+    three.Material? pot,
+  }) {
+    final m = src.clone(true);
+    m.traverse((o) {
+      if (o is three.Mesh) {
+        switch (o.material?.name) {
+          case 'oak':
+            o.material = _oak;
+          case 'walnut':
+            o.material = _walnut;
+          case 'shirt':
+            if (shirt != null) o.material = SceneKit.mat(shirt);
+          case 'pot':
+            if (pot != null) o.material = pot;
+        }
+      }
+    });
+    _root.add(m);
+    return m;
+  }
 
   late final StoreBuild _out;
   final List<_Place> _places = [];
@@ -120,8 +212,10 @@ class StoreBuilder {
 
   StoreBuild build() {
     _out = StoreBuild(three.Group());
+    _out.templates.addAll(models?.models ?? const {});
     _outside();
     _shell();
+    _lamps();
     _gate();
     _fridges();
     _serviceCounter();
@@ -139,15 +233,60 @@ class StoreBuilder {
     double y,
     double z, {
     String? name,
+    bool always = false,
   }) {
     final mesh = SceneKit.mesh(g, m, x: x, y: y, z: z);
     if (name != null) mesh.name = name;
-    _root.add(mesh);
+    if (!_skipVisuals || always) _root.add(mesh);
     return mesh;
   }
 
   // ---- outside -----------------------------------------------------------
   void _outside() {
+    final m = models?.models;
+    final ground = m?['outside_ground'];
+    final tree = m?['tree'];
+    final planter = m?['planter'];
+    if (ground == null || tree == null || planter == null) {
+      _outsideBoxes(); // code-built fallback
+      return;
+    }
+    _addModel(ground);
+    var n = 0;
+    for (final t in const [
+      [-10.0, 10.0],
+      [10.0, 10.0],
+      [-13.0, 15.0],
+      [13.0, 15.0],
+      [-9.0, 21.0],
+      [9.0, 21.0],
+      [-16.0, 5.0],
+      [16.0, 5.0],
+    ]) {
+      final o = _addModel(tree)..position.setValues(t[0], 0, t[1]);
+      _register('tree', 'tree_${++n}', o);
+    }
+    // planters with shrubs flanking the door
+    for (final x in const [-3.8, 3.8]) {
+      final o = _addModel(planter)
+        ..position.setValues(x, 0, SceneConfig.frontZ + 1.3);
+      _register('planter', x < 0 ? 'planter_left' : 'planter_right', o);
+    }
+    // benches on the plaza, turned towards the path
+    final bench = m?['bench'];
+    if (bench != null) {
+      final left = _addModel(bench)
+        ..position.setValues(-6.5, 0, 12)
+        ..rotation.y = math.pi / 2;
+      _register('bench', 'bench_1', left);
+      final right = _addModel(bench)
+        ..position.setValues(6.5, 0, 12)
+        ..rotation.y = -math.pi / 2;
+      _register('bench', 'bench_2', right);
+    }
+  }
+
+  void _outsideBoxes() {
     final ground = _add(
       SceneKit.plane(160, 160),
       SceneKit.mat(AppColors.groundOutside, roughness: 1),
@@ -396,45 +535,185 @@ class StoreBuilder {
     for (final z in const [-10.0, -6.0, -2.0, 2.0, 5.0]) {
       _add(SceneKit.box(w * 2, 0.22, 0.3), _oak, 0, h - 0.11, z);
     }
-    final lamps = <List<double>>[
-      for (final x in const [-6.35, 0.0, 6.35])
-        for (final z in const [-8.0, -4.0, 0.0, 3.0])
-          if (!(x.abs() < 1 && z < -6)) [x, z],
-    ];
-    final cords = three.InstancedMesh(
-      SceneKit.cyl(0.008, 0.008, 0.9, 6),
-      SceneKit.mat(AppColors.metalBlack),
-      lamps.length,
-    );
-    final shades = three.InstancedMesh(
-      SceneKit.cyl(0.1, 0.3, 0.26, 18),
-      SceneKit.mat(AppColors.metalBlack, roughness: 0.5, metalness: 0.4),
-      lamps.length,
-    );
-    final bulbs = three.InstancedMesh(
-      SceneKit.sphere(0.09, 10),
-      SceneKit.basic(AppColors.lampWarm),
-      lamps.length,
-    );
-    final m = three.Matrix4();
-    for (var i = 0; i < lamps.length; i++) {
-      m.makeTranslation(lamps[i][0], h - 0.45, lamps[i][1]);
-      cords.setMatrixAt(i, m);
-      m.makeTranslation(lamps[i][0], h - 0.98, lamps[i][1]);
-      shades.setMatrixAt(i, m);
-      m.makeTranslation(lamps[i][0], h - 1.06, lamps[i][1]);
-      bulbs.setMatrixAt(i, m);
+  }
+
+  // ---- lamps: each one is its own clickable object ------------------------
+  void _lamps() {
+    final glowTex = SceneTextures.radialGlow();
+    const h = SceneConfig.wallHeight;
+    var id = 0;
+    // ceiling pendants down the aisles
+    final model = models?.models['lamp'];
+    for (final x in const [-6.35, 0.0, 6.35]) {
+      for (final z in const [-8.0, -4.0, 0.0, 3.0]) {
+        if (x.abs() < 1 && z < -6) continue;
+        id++;
+        _addLamp(
+          id: id,
+          label: 'Lamp $id',
+          model: model,
+          fallback: () => _lampBoxes(copper: false),
+          x: x,
+          y: h,
+          z: z,
+          coneBottom: 0.7,
+          coneHeight: 1.6,
+          coneY: -1.9,
+          pool: glowTex,
+        );
+      }
     }
-    for (final im in [cords, shades, bulbs]) {
-      im.frustumCulled = false;
-      im.instanceMatrix!.needsUpdate = true;
-      _root.add(im);
+    // copper pendants over the service counter
+    final counterModel = models?.models['counter_lamp'];
+    var n = 0;
+    for (final x in const [-2.4, 0.0, 2.4]) {
+      id++;
+      n++;
+      _addLamp(
+        id: id,
+        label: 'Counter lamp $n',
+        model: counterModel,
+        fallback: () => _lampBoxes(copper: true),
+        x: x,
+        y: h,
+        z: SceneConfig.backZ + 0.95,
+        coneBottom: 0.55,
+        coneHeight: 1.0,
+        coneY: -2.2,
+      );
     }
+  }
+
+  void _addLamp({
+    required int id,
+    required String label,
+    required three.Object3D? model,
+    required three.Object3D Function() fallback,
+    required double x,
+    required double y,
+    required double z,
+    required double coneBottom,
+    required double coneHeight,
+    required double coneY,
+    three.Texture? pool,
+  }) {
+    final g = model != null ? model.clone(true) : fallback();
+    g.name = 'lamp:$id';
+    g.position.setValues(x, y, z);
+    final bulb = three.MeshBasicMaterial.fromMap({'color': 0xFFD9A0});
+    g.traverse((o) {
+      if (o is three.Mesh && o.name == 'bulb') o.material = bulb;
+    });
+    // soft cone of light under the shade (see-through: taps pass through)
+    final cone = three.Mesh(
+      three.CylinderGeometry(0.12, coneBottom, coneHeight, 18, 1, true),
+      three.MeshBasicMaterial.fromMap({
+        'color': 0xFFE6B0,
+        'transparent': true,
+        'opacity': 0.1,
+        'depthWrite': false,
+        'side': three.DoubleSide,
+      }),
+    );
+    cone.name = 'glass';
+    cone.position.setValues(0, coneY, 0);
+    g.add(cone);
+    three.Mesh? floorPool;
+    if (pool != null) {
+      // pool of warm light on the floor below
+      floorPool = three.Mesh(
+        SceneKit.plane(2.8, 2.8),
+        three.MeshBasicMaterial.fromMap({
+          'map': pool,
+          'color': 0xFFE2B0,
+          'transparent': true,
+          'opacity': 0.5,
+          'depthWrite': false,
+        }),
+      );
+      floorPool.name = 'glass';
+      floorPool.rotation.x = -math.pi / 2;
+      floorPool.position.setValues(x, 0.02, z);
+      _root.add(floorPool);
+    }
+    _root.add(g);
+    _out.lamps.add(LampObject(id, label, g, bulb, cone, floorPool));
+  }
+
+  /// Code-built pendant used when the lamp GLB is missing.
+  three.Object3D _lampBoxes({required bool copper}) {
+    final g = three.Group();
+    final cordLen = copper ? 1.3 : 0.9;
+    g.add(
+      SceneKit.mesh(
+        SceneKit.cyl(0.008, 0.008, cordLen, 6),
+        SceneKit.mat(AppColors.metalBlack),
+        y: -cordLen / 2,
+      ),
+    );
+    g.add(
+      copper
+          ? SceneKit.mesh(
+              SceneKit.cyl(0.05, 0.22, 0.4, 18),
+              SceneKit.mat(0xB87333, roughness: 0.3, metalness: 0.85),
+              y: -1.5,
+            )
+          : SceneKit.mesh(
+              SceneKit.cyl(0.1, 0.3, 0.26, 18),
+              SceneKit.mat(
+                AppColors.metalBlack,
+                roughness: 0.5,
+                metalness: 0.4,
+              ),
+              y: -0.98,
+            ),
+    );
+    g.add(
+      SceneKit.mesh(
+        SceneKit.sphere(copper ? 0.07 : 0.09, 10),
+        SceneKit.basic(0xFFD9A0),
+        y: copper ? -1.68 : -1.06,
+      )..name = 'bulb',
+    );
+    return g;
   }
 
   // ---- gate --------------------------------------------------------------
   /// Two hinged glass doors in a black metal frame that swing open.
   void _gate() {
+    final glb = models?.models['gate'];
+    if (glb != null) {
+      final m = _addModel(glb);
+      final left = m.getObjectByName('doorLeft');
+      final right = m.getObjectByName('doorRight');
+      if (left != null && right != null) {
+        _gateGlb = true;
+        for (final d in [left, right]) {
+          d.name = 'gate'; // a tap on a door opens the gate
+          _out.doors.add(d);
+        }
+        final open = textures.sign('open');
+        final panel = m.getObjectByName('panelRight');
+        if (open != null && panel != null) {
+          panel.add(
+            SceneKit.mesh(
+              SceneKit.plane(0.8, 0.2),
+              three.MeshBasicMaterial({three.MaterialProperty.map: open}),
+              y: 2.0,
+              z: 0.025,
+            ),
+          );
+        }
+      } else {
+        _root.remove(m);
+      }
+    }
+    _skipVisuals = _gateGlb;
+    _gateBoxes();
+    _skipVisuals = false;
+  }
+
+  void _gateBoxes() {
     final frame = SceneKit.mat(
       AppColors.doorFrame,
       roughness: 0.4,
@@ -462,6 +741,7 @@ class StoreBuilder {
         0,
         5.3,
         SceneConfig.frontZ + 0.42,
+        always: true,
       );
       sign.name = 'sign';
     }
@@ -471,7 +751,7 @@ class StoreBuilder {
       metalness: 0.8,
       roughness: 0.25,
     );
-    for (final hinge in const [-1.0, 1.0]) {
+    for (final hinge in _gateGlb ? const <double>[] : const [-1.0, 1.0]) {
       final pivot = three.Group();
       pivot.name = 'gate';
       pivot.position.setValues(hinge * half, 0, SceneConfig.frontZ + 0.15);
@@ -521,6 +801,7 @@ class StoreBuilder {
       0.02,
       SceneConfig.frontZ + 1.5,
       name: 'ground',
+      always: true,
     );
     mat.rotation.x = -1.5708;
     final inner = _add(
@@ -530,6 +811,7 @@ class StoreBuilder {
       0.02,
       SceneConfig.frontZ - 1.0,
       name: 'floor',
+      always: true,
     );
     inner.rotation.x = -1.5708;
   }
@@ -557,6 +839,14 @@ class StoreBuilder {
     required double yaw,
     required double width,
   }) {
+    final glb = models?.models[width > 3.2 ? 'fridge_bay_36' : 'fridge_bay_29'];
+    if (glb != null) {
+      final m = _addModel(glb);
+      m.position.setValues(x, 0, z);
+      m.rotation.y = yaw;
+      _fridgeCollider(x, z, yaw, width);
+      return;
+    }
     final body = SceneKit.mat(AppColors.fridgeBody, roughness: 0.5);
     final glass = SceneKit.glass(AppColors.glass, 0.16);
     final brass = SceneKit.mat(
@@ -647,7 +937,10 @@ class StoreBuilder {
     g.position.setValues(x, 0, z);
     g.rotation.y = yaw;
     _root.add(g);
+    _fridgeCollider(x, z, yaw, width);
+  }
 
+  void _fridgeCollider(double x, double z, double yaw, double width) {
     if (yaw != 0) {
       // side-wall bay: footprint is 1.1 deep in x and [width] long in z
       final dir = yaw > 0 ? 1.0 : -1.0;
@@ -668,6 +961,14 @@ class StoreBuilder {
   /// a kitchen pass window, frosted side windows, four menu screens and
   /// copper pendant lamps. The cabinet goods are real, buyable products.
   void _serviceCounter() {
+    final glb = models?.models['service_counter'];
+    if (glb != null) _addModel(glb);
+    _skipVisuals = glb != null;
+    _serviceCounterBoxes();
+    _skipVisuals = false;
+  }
+
+  void _serviceCounterBoxes() {
     const zBack = SceneConfig.backZ;
     const cz = zBack + 0.95; // island centre
     const depth = 1.5;
@@ -682,7 +983,6 @@ class StoreBuilder {
     final black = SceneKit.mat(0x14161A, roughness: 0.35, metalness: 0.4);
     final steel = SceneKit.mat(0xC9CDD2, roughness: 0.3, metalness: 0.8);
     final glass = SceneKit.glass(AppColors.glass, 0.12);
-    final copper = SceneKit.mat(0xB87333, roughness: 0.3, metalness: 0.85);
 
     // ribbed base: slats over a solid core, centre block taller
     for (final side in const [-1.0, 1.0]) {
@@ -772,7 +1072,20 @@ class StoreBuilder {
       if (items.isEmpty) continue;
       for (var l = 0; l < shelfYs.length; l++) {
         final y0 = shelfYs[l] + 0.0125;
-        var x = cx - cabW / 2 + 0.22;
+        // the left cabinet keeps the left end of two shelves free for the
+        // showcase pieces (cake plate on top, muffin below it)
+        var lead = 0.22;
+        if (c.side < 0 &&
+            l == shelfYs.length - 1 &&
+            models?.models['cake_slices'] != null) {
+          lead = 0.62;
+        }
+        if (c.side < 0 &&
+            l == shelfYs.length - 2 &&
+            models?.models['fruit_muffin'] != null) {
+          lead = 0.5;
+        }
+        var x = cx - cabW / 2 + lead;
         final xEnd = cx + cabW / 2 - 0.22;
         var k = l;
         var item = items[k % items.length];
@@ -794,7 +1107,8 @@ class StoreBuilder {
           if (runStart) {
             (_tagsZ[item.id] ??= []).add([
               x + 0.11,
-              shelfYs[l] + 0.045,
+              shelfYs[l] -
+                  0.05, // hangs below the shelf edge, clear of the product
               front - 0.06,
             ]);
             runStart = false;
@@ -810,6 +1124,35 @@ class StoreBuilder {
           }
         }
       }
+    }
+    // showcase pieces on the left cabinet: each is a whole GLB model that stands
+    // for a product (tap it to see it spin, then buy it), with a price tag
+    void tag(String productId, double x, double shelfY) {
+      (_tagsZ[productId] ??= []).add([x, shelfY - 0.05, front - 0.06]);
+    }
+
+    final leftEdge = -cabCx - cabW / 2;
+    final cake = models?.models['cake_slices'];
+    if (cake != null) {
+      final x = leftEdge + 0.33;
+      final o = _addModel(cake)
+        ..scale.setValues(_cakeScale, _cakeScale, _cakeScale)
+        ..position.setValues(x, shelfYs.last + 0.0125, front - 0.33);
+      _register('showcase', 'showcase_cake', o, template: 'cake_slices');
+      tag('pineapple_pastry', x, shelfYs.last);
+    }
+    final muffin = models?.models['fruit_muffin'];
+    if (muffin != null) {
+      final x = leftEdge + 0.3;
+      final o = _addModel(muffin)
+        ..scale.setValues(_muffinScale, _muffinScale, _muffinScale)
+        ..position.setValues(
+          x,
+          shelfYs[shelfYs.length - 2] + 0.0125,
+          front - 0.3,
+        );
+      _register('showcase', 'showcase_muffin', o, template: 'fruit_muffin');
+      tag('fruit_muffin', x, shelfYs[shelfYs.length - 2]);
     }
     _out.colliders.add(Collider(-half - 0.1, half + 0.1, zBack, front + 0.05));
 
@@ -829,8 +1172,17 @@ class StoreBuilder {
       _add(SceneKit.box(0.1, 1.46, 0.1), black, x, 2.3, wz);
     }
     _add(SceneKit.box(7.2, 0.05, 0.5), steel, 0, 1.7, zBack + 0.3);
+    final chefModel = models?.models['chef'];
     for (final x in const [-1.2, 0.9]) {
-      final shirt = SceneKit.mat(x < 0 ? 0x5A1E2B : 0xF2F2F0);
+      final shirtColor = x < 0 ? 0x5A1E2B : 0xF2F2F0;
+      if (chefModel != null) {
+        _addModel(
+          chefModel,
+          shirt: shirtColor,
+        ).position.setValues(x, 2.1, zBack + 0.5);
+        continue;
+      }
+      final shirt = SceneKit.mat(shirtColor);
       _add(SceneKit.box(0.5, 0.65, 0.3), shirt, x, 2.1, zBack + 0.5);
       _add(
         SceneKit.sphere(0.13),
@@ -882,26 +1234,21 @@ class StoreBuilder {
         x,
         3.78,
         zBack + 0.14,
-      );
-    }
-
-    // copper cone pendants over the island
-    for (final x in const [-2.4, 0.0, 2.4]) {
-      const h = SceneConfig.wallHeight;
-      _add(SceneKit.cyl(0.008, 0.008, 1.3, 6), black, x, h - 0.65, cz);
-      _add(SceneKit.cyl(0.05, 0.22, 0.4, 18), copper, x, h - 1.5, cz);
-      _add(
-        SceneKit.sphere(0.07, 10),
-        SceneKit.basic(AppColors.lampWarm),
-        x,
-        h - 1.68,
-        cz,
+        always: true,
       );
     }
   }
 
   // ---- checkout counter ---------------------------------------------------
   void _counter() {
+    final glb = models?.models['checkout_counter'];
+    if (glb != null) _addModel(glb);
+    _skipVisuals = glb != null;
+    _counterBoxes();
+    _skipVisuals = false;
+  }
+
+  void _counterBoxes() {
     _add(SceneKit.box(3.0, 1.0, 1.0), _walnut, 7.0, 0.5, 3.6);
     _add(SceneKit.box(3.2, 0.06, 1.2), _oak, 7.0, 1.03, 3.6);
     _add(
@@ -930,6 +1277,13 @@ class StoreBuilder {
 
   // ---- plants: pots with real leaves ---------------------------------------
   void _plants() {
+    final plantModel = models?.models['plant'];
+    _skipVisuals = plantModel != null;
+    _plantsBoxes(plantModel);
+    _skipVisuals = false;
+  }
+
+  void _plantsBoxes(three.Object3D? plantModel) {
     const spots = [
       [9.0, 4.8, 1.0],
       [-9.0, -10.6, 1.2],
@@ -950,6 +1304,19 @@ class StoreBuilder {
     for (final s in spots) {
       final x = s[0], z = s[1], k = s[2];
       final pot = (n++ % 2 == 0) ? potA : potB;
+      if (plantModel != null) {
+        final m = _addModel(plantModel, pot: pot);
+        m.position.setValues(x, 0, z);
+        m.scale.setValues(k, k, k);
+        final besideGate = (x.abs() - 2.9).abs() < 0.01;
+        _register(
+          'plant',
+          besideGate
+              ? (x < 0 ? 'plant_gate_left' : 'plant_gate_right')
+              : 'plant_$n',
+          m,
+        );
+      }
       _add(SceneKit.cyl(0.26 * k, 0.19 * k, 0.5 * k, 16), pot, x, 0.25 * k, z);
       _add(SceneKit.cyl(0.25 * k, 0.25 * k, 0.02, 16), soil, x, 0.5 * k, z);
       _add(SceneKit.torus(0.25 * k, 0.018 * k), pot, x, 0.5 * k, z).rotation.x =
@@ -984,7 +1351,7 @@ class StoreBuilder {
     }
     mesh.instanceMatrix!.needsUpdate = true;
     mesh.instanceColor!.needsUpdate = true;
-    _root.add(mesh);
+    if (plantModel == null) _root.add(mesh);
   }
 
   // ---- shelves ------------------------------------------------------------
@@ -1040,51 +1407,62 @@ class StoreBuilder {
     final unitMaxX = x0 + (faces.any((f) => f.side > 0) ? d : 0.06);
     final unitW = unitMaxX - unitMinX;
     final unitCx = (unitMinX + unitMaxX) / 2;
-    _add(SceneKit.box(0.08, h, len), _walnut, x0, h / 2, cz);
-    for (final z in const [
-      SceneConfig.shelfZStart,
-      (SceneConfig.shelfZStart + SceneConfig.shelfZEnd) / 2,
-      SceneConfig.shelfZEnd,
-    ]) {
-      _add(SceneKit.box(0.1, h, 0.07), metal, x0, h / 2, z);
+    final glb = shelfModel != null;
+    if (!glb) {
+      _add(SceneKit.box(0.08, h, len), _walnut, x0, h / 2, cz);
+      for (final z in const [
+        SceneConfig.shelfZStart,
+        (SceneConfig.shelfZStart + SceneConfig.shelfZEnd) / 2,
+        SceneConfig.shelfZEnd,
+      ]) {
+        _add(SceneKit.box(0.1, h, 0.07), metal, x0, h / 2, z);
+      }
+      _add(
+        SceneKit.box(unitW + 0.04, 0.22, len + 0.04),
+        _walnut,
+        unitCx,
+        0.11,
+        cz,
+      );
+      _add(SceneKit.box(unitW + 0.04, 0.08, len + 0.08), _oak, unitCx, h, cz);
     }
-    _add(
-      SceneKit.box(unitW + 0.04, 0.22, len + 0.04),
-      _walnut,
-      unitCx,
-      0.11,
-      cz,
-    );
-    _add(SceneKit.box(unitW + 0.04, 0.08, len + 0.08), _oak, unitCx, h, cz);
     for (final f in faces) {
       final color = SceneKit.mat(f.category.color);
       final fx = x0 + f.side * d / 2;
-      for (final level in SceneConfig.boardHeights) {
-        _add(SceneKit.box(d, 0.04, len), _oak, fx, level, cz);
-        _add(
-          SceneKit.box(0.03, 0.04, len),
-          _oak,
-          x0 + f.side * (d - 0.015),
-          level + 0.025,
-          cz,
-        );
-        _add(
-          SceneKit.box(0.02, 0.1, len - 0.06),
-          metal,
-          x0 + f.side * (d + 0.005),
-          level - 0.05,
-          cz,
-        );
-      }
-      // oak end caps with a category-colour band so the aisle is recognisable from afar
-      for (final z in const [SceneConfig.shelfZStart, SceneConfig.shelfZEnd]) {
-        _add(SceneKit.box(d, h, 0.08), _oak, fx, h / 2, z);
-        _add(SceneKit.box(d + 0.01, 0.35, 0.09), color, fx, h - 0.35, z);
+      if (glb) _addGlbFace(x0, f, cz, color);
+      if (!glb) {
+        for (final level in SceneConfig.boardHeights) {
+          _add(SceneKit.box(d, 0.04, len), _oak, fx, level, cz);
+          _add(
+            SceneKit.box(0.03, 0.04, len),
+            _oak,
+            x0 + f.side * (d - 0.015),
+            level + 0.025,
+            cz,
+          );
+          _add(
+            SceneKit.box(0.02, 0.1, len - 0.06),
+            metal,
+            x0 + f.side * (d + 0.005),
+            level - 0.05,
+            cz,
+          );
+        }
+        // oak end caps with a category-colour band so the aisle is recognisable from afar
+        for (final z in const [
+          SceneConfig.shelfZStart,
+          SceneConfig.shelfZEnd,
+        ]) {
+          _add(SceneKit.box(d, h, 0.08), _oak, fx, h / 2, z);
+          _add(SceneKit.box(d + 0.01, 0.35, 0.09), color, fx, h - 0.35, z);
+        }
       }
       // walnut header board with a category-colour stripe and the name
       final hx = x0 + f.side * 0.1;
-      _add(SceneKit.box(0.1, 0.95, 4.1), _walnut, hx, h + 0.55, cz);
-      _add(SceneKit.box(0.11, 0.1, 4.1), color, hx, h + 0.12, cz);
+      if (!glb) {
+        _add(SceneKit.box(0.1, 0.95, 4.1), _walnut, hx, h + 0.55, cz);
+        _add(SceneKit.box(0.11, 0.1, 4.1), color, hx, h + 0.12, cz);
+      }
       final tex = textures.sign(f.category.id);
       if (tex != null) {
         final plane = _add(
@@ -1099,12 +1477,43 @@ class StoreBuilder {
     }
   }
 
+  /// Places one clone of the GLB shelf face and swaps its placeholder materials
+  /// for the store textures and this aisle's colour (by material name).
+  void _addGlbFace(double x0, ShelfFace f, double cz, three.Material band) {
+    final m = shelfModel!.clone(true);
+    m.position.setValues(x0, 0, cz);
+    m.rotation.y = f.side > 0 ? 0 : math.pi;
+    final metal = SceneKit.mat(
+      AppColors.metalBlack,
+      roughness: 0.4,
+      metalness: 0.5,
+    );
+    m.traverse((o) {
+      if (o is three.Mesh) {
+        switch (o.material?.name) {
+          case 'oak':
+            o.material = _oak;
+          case 'walnut':
+            o.material = _walnut;
+          case 'metal':
+            o.material = metal;
+          case 'band':
+            o.material = band;
+        }
+      }
+    });
+    _root.add(m);
+  }
+
   // ---- products: packed rows like a real shelf ----------------------------
 
   /// Fills every board of [f] edge to edge with runs of the same product,
   /// front-facing, like a supermarket gondola, with a price tag per run.
   void _fillFace(ShelfFace f) {
-    final items = catalog.productsIn(f.category);
+    final items = catalog
+        .productsIn(f.category)
+        .where((p) => p.displayModel == null)
+        .toList();
     if (items.isEmpty) return;
     const d = SceneConfig.shelfDepth;
     const zEnd = SceneConfig.shelfZEnd - 0.12;

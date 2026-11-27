@@ -152,7 +152,11 @@ class PackageSpec {
 
   static final Map<ProductKind, three.BufferGeometry> _cache = {};
 
-  three.BufferGeometry geometry() => _cache.putIfAbsent(kind, _make);
+  /// Shapes loaded from assets/models/products/*.glb (see ModelLibrary).
+  static final Map<ProductKind, three.BufferGeometry> glbGeometry = {};
+
+  three.BufferGeometry geometry() =>
+      _cache.putIfAbsent(kind, () => glbGeometry[kind] ?? _make());
 
   three.BufferGeometry _make() {
     switch (kind) {

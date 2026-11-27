@@ -51,6 +51,29 @@ class ProductLocalDataSource implements ProductDataSource {
   static const _products = <Map<String, dynamic>>[
     // Bakery
     {
+      'id': 'pineapple_pastry',
+      'name': 'Pineapple Pastry',
+      'categoryId': 'bakery',
+      'emoji': '🍍',
+      'price': 95,
+      'calories': 340,
+      'stock': 6,
+      'kind': 'cake',
+      'color': 0xF3E6B8,
+      'accent': 0xFFC93C,
+      'isVeg': true,
+      // shown as the plated showcase cake (assets/models/cake_slices.glb)
+      'displayModel': 'cake_slices',
+      'description': 'Two slices of light vanilla sponge layered with whipped cream and juicy pineapple, finished with a dark chocolate garnish.',
+      'ingredients': [
+        'Vanilla sponge',
+        'Whipped cream',
+        'Pineapple',
+        'Dark chocolate',
+        'Sugar',
+      ],
+    },
+    {
       'id': 'cake',
       'name': 'Chocolate Cake',
       'categoryId': 'bakery',
@@ -64,6 +87,23 @@ class ProductLocalDataSource implements ProductDataSource {
       'isVeg': true,
       'description': 'Soft chocolate sponge layered with rich ganache and topped with a cherry.',
       'ingredients': ['Flour', 'Cocoa', 'Sugar', 'Butter', 'Eggs'],
+    },
+    {
+      'id': 'fruit_muffin',
+      'name': 'Fruit Muffin',
+      'categoryId': 'bakery',
+      'emoji': '🧁',
+      'price': 60,
+      'calories': 290,
+      'stock': 10,
+      'kind': 'cupcake',
+      'color': 0xE8B352,
+      'accent': 0xC62828,
+      'isVeg': true,
+      // shown as the muffin in the showcase (assets/models/fruit_muffin.glb)
+      'displayModel': 'fruit_muffin',
+      'description': 'A soft golden muffin baked with juicy red fruit pieces, in a polka-dot paper cup.',
+      'ingredients': ['Flour', 'Butter', 'Eggs', 'Sugar', 'Mixed fruit'],
     },
     {
       'id': 'donut',

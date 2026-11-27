@@ -11,6 +11,7 @@ import '../../domain/entities/product.dart';
 import '../providers/store_provider.dart';
 import 'cleaning_robot.dart';
 import 'held_basket.dart';
+import 'model_library.dart';
 import 'product_package.dart';
 import 'scene_config.dart';
 import 'scene_kit.dart';
@@ -32,6 +33,7 @@ class StoreScene {
     required this.onAisleChanged,
     required this.onPhaseChanged,
     required this.onReady,
+    this.onObjectTapped,
   });
 
   final StoreCatalog catalog;
@@ -41,6 +43,10 @@ class StoreScene {
   final void Function(String aisle) onAisleChanged;
   final void Function(StorePhase phase) onPhaseChanged;
   final void Function() onReady;
+
+  /// A tree, bench, plant, planter or lamp was tapped. [label] is ready to show
+  /// (for a lamp it includes the new ON/OFF state).
+  final void Function(String kind, String label)? onObjectTapped;
 
   /// Created once. Never recreate it: that would restart setup and show the loader again.
   late final three.ThreeJS threeJs = three.ThreeJS(
@@ -55,6 +61,43 @@ class StoreScene {
   );
 
   StoreBuild? _build;
+  three.HemisphereLight? _hemi;
+
+  /// Every selectable object in the world (trees, benches, plants, ...).
+  List<SceneObject> get objects => _build?.objects ?? const [];
+
+  /// All ceiling lamps, each with its own ON/OFF state.
+  List<LampObject> get lamps => _build?.lamps ?? const [];
+
+  /// Switches one lamp (by its id, 1-based) ON or OFF.
+  void setLamp(int id, bool on) {
+    for (final l in lamps) {
+      if (l.id == id) l.setOn(on);
+    }
+    _updateLighting();
+  }
+
+  void toggleLamp(int id) {
+    for (final l in lamps) {
+      if (l.id == id) setLamp(id, !l.on);
+    }
+  }
+
+  void setAllLamps(bool on) {
+    for (final l in lamps) {
+      l.setOn(on);
+    }
+    _updateLighting();
+  }
+
+  /// The store gets darker as lamps go off (a cheap stand-in for real lights).
+  void _updateLighting() {
+    final all = lamps;
+    if (all.isEmpty) return;
+    final on = all.where((l) => l.on).length / all.length;
+    _hemi?.intensity = SceneConfig.hemiIntensity * (0.45 + 0.55 * on);
+  }
+
   SceneTextures? _textures;
   CleaningRobot? _robot;
 
@@ -66,6 +109,46 @@ class StoreScene {
   double _showcaseT = 0;
   double _showcaseSpin = 0;
   final three.Vector3 _showcaseFrom = three.Vector3();
+
+  /// Width and half height (metres) of each display model, to size its showcase.
+  static const _showcaseDims = <String, (double, double)>{
+    'cake_slices': (0.27, 0.07),
+    'fruit_muffin': (0.105, 0.0465),
+  };
+
+  // Manual view of the showcased item: drag to turn it, tilt to see the top.
+  double _showcaseUserYaw = 0;
+  double _showcasePitch = _showcaseRestPitch;
+  double _showcaseZoom = 1;
+  double _spinPausedUntil = 0;
+  static const _showcaseRestPitch = 0.18;
+
+  /// Drag on the showcased item: left/right turns it, up/down tilts it so the
+  /// top (or the bottom) faces you. Auto-spin pauses for a moment.
+  void rotateShowcase(Offset delta) {
+    if (_showcase == null) return;
+    _showcaseUserYaw += delta.dx * 0.012;
+    _showcasePitch = (_showcasePitch + delta.dy * 0.012).clamp(-0.6, 1.57);
+    _spinPausedUntil = _clock + 2.5;
+  }
+
+  /// Pinch on the showcased item ([factor] > 1 zooms in).
+  void zoomShowcase(double factor) {
+    if (_showcase == null || factor <= 0) return;
+    _showcaseZoom = (_showcaseZoom * factor).clamp(0.6, 2.6);
+  }
+
+  /// Back to the normal view with the slow spin.
+  void resetShowcase() {
+    _showcaseUserYaw = 0;
+    _showcasePitch = _showcaseRestPitch;
+    _showcaseZoom = 1;
+    _spinPausedUntil = 0;
+  }
+
+  three.Object3D?
+  _showcaseHidden; // the shelf model hidden while its copy is shown
+  ({Product product, three.Object3D node, String template})? _objectTap;
 
   /// Landscape: the detail panel takes the right side, so the item rests in
   /// the free area on the left. Portrait: above the bottom sheet.
@@ -135,9 +218,12 @@ class StoreScene {
         140,
       );
 
-      threeJs.scene.add(
-        three.HemisphereLight(0xFFFFFF, 0xF4F2EE, SceneConfig.hemiIntensity),
+      _hemi = three.HemisphereLight(
+        0xFFFFFF,
+        0xF4F2EE,
+        SceneConfig.hemiIntensity,
       );
+      threeJs.scene.add(_hemi!);
       final sun = three.DirectionalLight(0xFFF1DC, SceneConfig.sunIntensity);
       sun.position.setValues(6, 14, 10);
       threeJs.scene.add(sun);
@@ -158,7 +244,12 @@ class StoreScene {
         'menu_cake': (text: 'Fresh Cakes', bg: 0x2A2D31, fg: 0xFFFFFF),
       }, catalog.products);
       _textures = textures;
-      _build = StoreBuilder(catalog, textures).build();
+      // every GLB model (shelves, counters, fridges, chefs, gate, products)
+      final models = await ModelLibrary.load();
+      debugPrint(
+        'GLB MODELS: ${models.models.keys.join(', ')} | products from GLB: ${models.productCount}',
+      );
+      _build = StoreBuilder(catalog, textures, models: models).build();
       threeJs.scene.add(_build!.root);
       // GLB robot vacuum that sweeps the floor (skipped quietly if it fails)
       final robot = CleaningRobot();
@@ -347,6 +438,30 @@ class StoreScene {
         enterStore();
         return;
       }
+      if (o.startsWith('lamp:')) {
+        final id = int.tryParse(o.substring(5));
+        if (id != null) {
+          toggleLamp(id);
+          final lamp = lamps.firstWhere((l) => l.id == id);
+          onObjectTapped?.call(
+            'lamp',
+            '${lamp.label}: ${lamp.on ? 'ON' : 'OFF'}',
+          );
+        }
+        return;
+      }
+      if (o.startsWith('obj:')) {
+        final id = o.substring(4);
+        final obj = objects.where((e) => e.id == id).firstOrNull;
+        final template = obj?.template;
+        if (obj != null && template != null) {
+          _onDisplayObjectHit(obj, template);
+          return;
+        }
+        final kind = obj?.kind ?? '';
+        onObjectTapped?.call(kind, id.replaceAll('_', ' '));
+        return;
+      }
       break;
     }
     if (_phase != StorePhase.inside) return;
@@ -376,7 +491,12 @@ class StoreScene {
   String? _owner(three.Object3D? o) {
     var n = o;
     while (n != null) {
-      if (n.name.startsWith('product:') || n.name == 'gate') return n.name;
+      if (n.name.startsWith('product:') ||
+          n.name.startsWith('lamp:') ||
+          n.name.startsWith('obj:') ||
+          n.name == 'gate') {
+        return n.name;
+      }
       n = n.parent;
     }
     return null;
@@ -390,6 +510,7 @@ class StoreScene {
     if (group == null) return;
     final idx = (instance ~/ group.per).clamp(0, group.spots.length - 1);
     final spot = group.spots[idx];
+    _objectTap = null;
     _lastTap = (id: id, index: idx);
     final dx = spot.position.x - _pos.x, dz = spot.position.z - _pos.z;
     if (math.sqrt(dx * dx + dz * dz) <= SceneConfig.openDistance) {
@@ -479,6 +600,11 @@ class StoreScene {
   /// Lifts the last tapped product off the shelf and flies it to the centre of
   /// the view (a child of the camera, so it stays put while the sheet is open).
   void _beginShowcase() {
+    final obj = _objectTap;
+    if (obj != null) {
+      _beginObjectShowcase(obj);
+      return;
+    }
     final tap = _lastTap;
     final tex = _textures;
     if (tap == null || tex == null) return;
@@ -490,18 +616,53 @@ class StoreScene {
     final maxDim = math.max(spec.width, math.max(spec.height, spec.depth));
     // fraction of the screen height the item should fill (bigger in landscape)
     final half = math.tan(_vfov * math.pi / 360);
-    final frac = _showcaseLandscape ? 0.42 : 0.3;
+    final frac = _showcaseLandscape ? 0.5 : 0.36;
     final s = (frac * 2 * half / maxDim).clamp(0.5, 4.0);
     final model = spec.build(product, tex, scale: s);
     // centre the model on its own origin so it spins around its middle
     model.position.setValues(0, -spec.height * s / 2, 0);
     final wrap = three.Group()..add(model);
+    _launchShowcase(wrap, g.spots[tap.index].position);
+    g.setHidden(tap.index, true);
+    _showcaseGroup = g;
+    _showcaseIdx = tap.index;
+  }
+
+  /// Showcase for a product that is a whole GLB model (the plated cake): the
+  /// model on the shelf is hidden and a copy flies to the centre of the view.
+  void _beginObjectShowcase(
+    ({Product product, three.Object3D node, String template}) obj,
+  ) {
+    final template = _build?.templates[obj.template];
+    if (template == null) return;
+    _removeShowcase(restore: true);
+    final dim = _showcaseDims[obj.template] ?? (0.2, 0.05);
+    final width = dim.$1, midHeight = dim.$2;
+    final half = math.tan(_vfov * math.pi / 360);
+    final frac = _showcaseLandscape ? 0.54 : 0.4;
+    final s = (frac * 2 * half / width).clamp(0.5, 6.0);
+    final model = template.clone(true);
+    model.scale.setValues(s, s, s);
+    model.position.setValues(0, -midHeight * s, 0);
+    final wrap = three.Group()..add(model);
+    _launchShowcase(
+      wrap,
+      three.Vector3(
+        obj.node.position.x,
+        obj.node.position.y,
+        obj.node.position.z,
+      ),
+    );
+    obj.node.visible = false;
+    _showcaseHidden = obj.node;
+  }
+
+  /// Puts [wrap] on the camera, starting where [from] is in the world.
+  void _launchShowcase(three.Group wrap, three.Vector3 from) {
     wrap.scale.setValues(0.01, 0.01, 0.01);
-    // start where the item sits on the shelf, in camera space
-    final sp = g.spots[tap.index].position;
-    final dx = sp.x - _pos.x,
-        dy = sp.y - SceneConfig.eyeHeight,
-        dz = sp.z - _pos.z;
+    final dx = from.x - _pos.x,
+        dy = from.y - SceneConfig.eyeHeight,
+        dz = from.z - _pos.z;
     final cy = math.cos(_yaw), sy = math.sin(_yaw);
     final cp = math.cos(_pitch), spn = math.sin(_pitch);
     final x1 = dx * cy - dz * sy;
@@ -511,12 +672,45 @@ class StoreScene {
     _showcaseFrom.setValues(x1, ly, lz > -0.3 ? -0.5 : lz);
     wrap.position.setValues(_showcaseFrom.x, _showcaseFrom.y, _showcaseFrom.z);
     threeJs.camera.add(wrap);
-    g.setHidden(tap.index, true);
     _showcase = wrap;
-    _showcaseGroup = g;
-    _showcaseIdx = tap.index;
     _showcaseT = 0;
     _showcaseSpin = 0;
+    resetShowcase();
+  }
+
+  /// A tap on a display model that stands for a product (the plated cake).
+  void _onDisplayObjectHit(SceneObject obj, String template) {
+    final product = catalog.products
+        .where((p) => p.displayModel == template)
+        .firstOrNull;
+    if (product == null || _phase != StorePhase.inside) return;
+    _lastTap = null;
+    _objectTap = (product: product, node: obj.node, template: template);
+    final pos = obj.node.position;
+    final dx = pos.x - _pos.x, dz = pos.z - _pos.z;
+    if (math.sqrt(dx * dx + dz * dz) <= SceneConfig.openDistance) {
+      _faceTowards(pos.x, pos.z);
+      _beginShowcase();
+      onProductTapped(product);
+      return;
+    }
+    // walk to the front of the cabinet first
+    _pendingSpot = ProductSpot(
+      product,
+      three.Vector3(pos.x, pos.y, pos.z),
+      0,
+      faceZ: true,
+    );
+    _setTarget(
+      three.Vector3(
+        pos.x.clamp(SceneConfig.minX, SceneConfig.maxX),
+        SceneConfig.eyeHeight,
+        (pos.z + SceneConfig.standDistance).clamp(
+          SceneConfig.minZ,
+          SceneConfig.maxZ,
+        ),
+      ),
+    );
   }
 
   /// Called when the detail sheet closes. A cancelled product goes back on
@@ -530,6 +724,8 @@ class StoreScene {
     if (restore && g != null && _showcaseIdx >= 0) {
       if (!g.hidden.contains(_showcaseIdx)) g.setHidden(_showcaseIdx, false);
     }
+    _showcaseHidden?.visible = true;
+    _showcaseHidden = null;
     _showcase = null;
     _showcaseGroup = null;
     _showcaseIdx = -1;
@@ -553,12 +749,13 @@ class StoreScene {
       _showcaseFrom.y + (ty - _showcaseFrom.y) * e,
       _showcaseFrom.z + (-dist - _showcaseFrom.z) * e,
     );
-    final sc = 0.01 + 0.99 * e;
+    final sc = (0.01 + 0.99 * e) * _showcaseZoom;
     w.scale.setValues(sc, sc, sc);
-    // two quick turns while it flies in, then a slow spin
-    _showcaseSpin += dt * (t < 1 ? 0 : 1.1);
-    w.rotation.y = (1 - e) * 4 * math.pi + _showcaseSpin;
-    w.rotation.x = 0.18 * e;
+    // two quick turns while it flies in, then a slow spin (paused while you
+    // are turning it by hand)
+    if (t >= 1 && _clock > _spinPausedUntil) _showcaseSpin += dt * 1.1;
+    w.rotation.y = (1 - e) * 4 * math.pi + _showcaseSpin + _showcaseUserYaw;
+    w.rotation.x = _showcasePitch * e;
   }
 
   /// Swipes, scroll and keys feed an eased movement, so starting and

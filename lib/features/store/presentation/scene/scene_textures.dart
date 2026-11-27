@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -74,6 +75,25 @@ class SceneTextures {
         n: 128,
       ),
     );
+  }
+
+  /// Soft round white-to-transparent gradient (the light pool under a lamp).
+  static three.Texture radialGlow() {
+    const n = 64;
+    final bytes = Uint8List(n * n * 4);
+    for (var y = 0; y < n; y++) {
+      for (var x = 0; x < n; x++) {
+        final dx = (x + 0.5) / n * 2 - 1, dy = (y + 0.5) / n * 2 - 1;
+        final d = math.sqrt(dx * dx + dy * dy).clamp(0.0, 1.0);
+        final a = ((1 - d) * (1 - d) * 255).round();
+        final o = (y * n + x) * 4;
+        bytes[o] = 255;
+        bytes[o + 1] = 255;
+        bytes[o + 2] = 255;
+        bytes[o + 3] = a;
+      }
+    }
+    return _fromRgba(bytes, n, n);
   }
 
   static three.Texture _fromRgba(
