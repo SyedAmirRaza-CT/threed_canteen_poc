@@ -9,6 +9,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../domain/entities/basket.dart';
 import '../../domain/entities/product.dart';
 import '../providers/store_provider.dart';
+import 'cleaning_robot.dart';
 import 'held_basket.dart';
 import 'product_package.dart';
 import 'scene_config.dart';
@@ -55,6 +56,7 @@ class StoreScene {
 
   StoreBuild? _build;
   SceneTextures? _textures;
+  CleaningRobot? _robot;
 
   // Product showcase: the tapped item lifts off its shelf, spins and settles
   // in the centre of the view while the detail sheet is open.
@@ -158,6 +160,10 @@ class StoreScene {
       _textures = textures;
       _build = StoreBuilder(catalog, textures).build();
       threeJs.scene.add(_build!.root);
+      // GLB robot vacuum that sweeps the floor (skipped quietly if it fails)
+      final robot = CleaningRobot();
+      await robot.load(threeJs.scene);
+      _robot = robot;
       if (_pendingShelf != null) syncShelf(_pendingShelf!);
 
       // tap-to-walk marker on the floor
@@ -463,6 +469,7 @@ class StoreScene {
       held.layout(threeJs.width / threeJs.height, _vfov);
     }
     _updateShowcase(dt);
+    _robot?.update(dt);
     _updateMarker();
     _updateAisle();
   }
